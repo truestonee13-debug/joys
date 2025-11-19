@@ -1,0 +1,5 @@
+{
+  "name": "VeoSpark - AI Video Prompt Architect",
+  "description": "A professional prompt engineering tool to generate high-fidelity text prompts for AI Video models like Sora, Veo, and Runway using Gemini 2.5.",
+  "requestFramePermissions": []
+}
