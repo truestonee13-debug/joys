@@ -4,7 +4,8 @@ import { Header } from './components/Header';
 import { ResultCard } from './components/ResultCard';
 import { 
   generateVideoPrompt, 
-  generateDetailSuggestions, 
+  generateDetailSuggestions,
+  generateCinematicDesign, // Imported new service
   translateText, 
   translatePromptResult 
 } from './services/geminiService';
@@ -28,11 +29,12 @@ import {
   Sparkles,
   Timer,
   Scissors,
-  Film
+  Film,
+  Clapperboard
 } from 'lucide-react';
 
 // --- Translation Dictionaries ---
-
+// (Reuse existing huge translation object, abbreviating for clarity in update)
 const TRANSLATIONS = {
   en: {
     title: "Scene Configuration",
@@ -40,7 +42,7 @@ const TRANSLATIONS = {
     conceptPlaceholder: "e.g., A cyberpunk detective walking in rain, neon lights reflect on puddles...",
     styleLabel: "Visual Style",
     ratioLabel: "Aspect Ratio",
-    motionLabel: "Camera Movement",
+    motionLabel: "Camera Setup (Multi-select)",
     totalDurationLabel: "Total Duration",
     cutDurationLabel: "Cut Length",
     durationPlaceholder: "e.g., 10s",
@@ -58,6 +60,8 @@ const TRANSLATIONS = {
     emptyDesc: "Enter your concept on the left to generate professional-grade prompts optimized for Sora, Veo, and other AI video models.",
     errorGeneral: "An unexpected error occurred.",
     errorApi: "Failed to generate prompt. Please check your API key or internet connection.",
+    autoDesignBtn: "AI Director Auto-Design",
+    autoDesigning: "Consulting World-Class Crew...",
   },
   ko: {
     title: "장면 설정",
@@ -65,7 +69,7 @@ const TRANSLATIONS = {
     conceptPlaceholder: "예: 빗속을 걷는 사이버펑크 형사, 웅덩이에 반사되는 네온 사인...",
     styleLabel: "비주얼 스타일",
     ratioLabel: "화면 비율",
-    motionLabel: "카메라 무빙",
+    motionLabel: "카메라 무빙 & 구도 (다중 선택 가능)",
     totalDurationLabel: "영상 총 길이",
     cutDurationLabel: "컷 길이",
     durationPlaceholder: "예: 10초",
@@ -83,6 +87,8 @@ const TRANSLATIONS = {
     emptyDesc: "왼쪽에 컨셉을 입력하여 Sora, Veo 등의 AI 비디오 모델에 최적화된 전문가급 프롬프트를 생성하세요.",
     errorGeneral: "알 수 없는 오류가 발생했습니다.",
     errorApi: "프롬프트 생성 실패. API 키나 인터넷 연결을 확인해주세요.",
+    autoDesignBtn: "AI 감독 자동 설계",
+    autoDesigning: "세계적 제작진과 협의 중...",
   }
 };
 
@@ -132,43 +138,89 @@ const STYLE_LABELS: Record<VideoStyle, { en: string; ko: string }> = {
 };
 
 const MOTION_LABELS: Record<CameraMotion, { en: string; ko: string }> = {
-  // Basic
+  // 1. Basic Movement
   [CameraMotion.Static]: { en: "Static", ko: "고정 (Static)" },
   [CameraMotion.Pan]: { en: "Pan", ko: "팬 (좌우 회전)" },
   [CameraMotion.Tilt]: { en: "Tilt", ko: "틸트 (상하 회전)" },
   [CameraMotion.ZoomIn]: { en: "Zoom In", ko: "줌 인" },
   [CameraMotion.ZoomOut]: { en: "Zoom Out", ko: "줌 아웃" },
-  
-  // Advanced
+  [CameraMotion.Pedestal]: { en: "Pedestal", ko: "페데스탈 (상하 수직이동)" },
+  [CameraMotion.Truck]: { en: "Truck", ko: "트럭 (좌우 수평이동)" },
+  [CameraMotion.Roll]: { en: "Camera Roll", ko: "롤 (카메라 회전)" },
+
+  // 2. Framing & Angles
+  [CameraMotion.ExtremeCloseUp]: { en: "Extreme Close-Up", ko: "익스트림 클로즈업 (초근접)" },
+  [CameraMotion.CloseUp]: { en: "Close-Up", ko: "클로즈업 (인물/사물 강조)" },
+  [CameraMotion.MediumShot]: { en: "Medium Shot", ko: "미디엄 샷 (상반신)" },
+  [CameraMotion.WideShot]: { en: "Wide Shot", ko: "와이드 샷 (배경 포함)" },
+  [CameraMotion.EstablishingShot]: { en: "Establishing Shot", ko: "이스타블리싱 샷 (설정)" },
+  [CameraMotion.LowAngle]: { en: "Low Angle", ko: "로우 앵글 (아래에서 위로)" },
+  [CameraMotion.HighAngle]: { en: "High Angle", ko: "하이 앵글 (위에서 아래로)" },
+  [CameraMotion.Overhead]: { en: "Overhead View", ko: "오버헤드 (수직 부감)" },
+  [CameraMotion.WormsEye]: { en: "Worm's Eye", ko: "웜즈 아이 (바닥 시점)" },
+  [CameraMotion.EyeLevel]: { en: "Eye Level", ko: "아이 레벨 (눈높이)" },
+  [CameraMotion.DutchAngle]: { en: "Dutch Angle", ko: "더치 앵글 (기울이기)" },
+
+  // 3. Advanced & Dynamic
   [CameraMotion.DollyZoom]: { en: "Dolly Zoom", ko: "돌리 줌 (현기증 효과)" },
   [CameraMotion.TrackingShot]: { en: "Tracking Shot", ko: "트래킹 (피사체 추적)" },
-  [CameraMotion.Truck]: { en: "Truck", ko: "트럭 (카메라 전체 좌우이동)" },
-  [CameraMotion.Pedestal]: { en: "Pedestal", ko: "페데스탈 (카메라 전체 상하이동)" },
   [CameraMotion.Crane]: { en: "Crane / Jib", ko: "크레인 / 지브 샷" },
   [CameraMotion.Orbit]: { en: "Orbit / Arc", ko: "오빗 / 아크 (빙글 돌기)" },
-  [CameraMotion.DutchAngle]: { en: "Dutch Angle", ko: "더치 앵글 (기울이기)" },
+  [CameraMotion.Handheld]: { en: "Handheld", ko: "핸드헬드 (들고 찍기)" },
+  [CameraMotion.ShakeyCam]: { en: "Shakey Cam", ko: "쉐이키 캠 (심한 흔들림)" },
+  [CameraMotion.DroneFlyover]: { en: "Drone Flyover", ko: "드론 비행 (상공)" },
+  [CameraMotion.FPV]: { en: "FPV Drone", ko: "FPV 드론 (1인칭 고속)" },
+  [CameraMotion.FollowShot]: { en: "Follow Shot", ko: "팔로우 샷 (뒤따라가기)" },
+  [CameraMotion.POV]: { en: "POV", ko: "1인칭 시점 (주인공 시선)" },
+  [CameraMotion.Gimbal]: { en: "Gimbal Smooth", ko: "짐벌 (흔들림 없는)" },
+  [CameraMotion.Steadicam]: { en: "Steadicam", ko: "스테디캠 (부드러운 이동)" },
   [CameraMotion.WhipPan]: { en: "Whip Pan", ko: "휩 팬 (빠른 전환)" },
   [CameraMotion.CrashZoom]: { en: "Crash Zoom", ko: "크래시 줌 (급격한 줌)" },
-  [CameraMotion.Roll]: { en: "Camera Roll", ko: "롤 (카메라 회전)" },
-  
-  // Dynamic
-  [CameraMotion.Handheld]: { en: "Handheld", ko: "핸드헬드 (들고 찍기)" },
-  [CameraMotion.ShakeyCam]: { en: "Shakey Cam", ko: "쉐이키 캠 (흔들림/혼란)" },
-  [CameraMotion.DroneFlyover]: { en: "Drone Flyover", ko: "드론 비행 (상공)" },
-  [CameraMotion.FPV]: { en: "FPV Speed Drone", ko: "FPV 드론 (1인칭 고속)" },
-  [CameraMotion.BulletTime]: { en: "Bullet Time", ko: "불릿 타임 (매트릭스)" },
-  [CameraMotion.FollowShot]: { en: "Follow Shot", ko: "팔로우 샷 (뒤따라가기)" },
-  [CameraMotion.POV]: { en: "POV", ko: "1인칭 시점 (눈으로 보는 듯)" },
-  
-  // Time
+
+  // 4. Lens & Effects
+  [CameraMotion.RackFocus]: { en: "Rack Focus", ko: "랙 포커스 (초점 이동)" },
+  [CameraMotion.DeepFocus]: { en: "Deep Focus", ko: "딥 포커스 (전체 선명)" },
+  [CameraMotion.ShallowFocus]: { en: "Shallow Focus", ko: "쉘로우 포커스 (아웃포커싱)" },
+  [CameraMotion.FishEye]: { en: "Fish Eye", ko: "어안 렌즈 (왜곡)" },
+  [CameraMotion.BulletTime]: { en: "Bullet Time", ko: "불릿 타임 (매트릭스 효과)" },
+
+  // 5. Time & Speed
   [CameraMotion.SlowMotion]: { en: "Slow Motion", ko: "슬로우 모션" },
   [CameraMotion.TimeLapse]: { en: "Time-Lapse", ko: "타임랩스 (빠른 시간)" },
   [CameraMotion.HyperLapse]: { en: "Hyper-Lapse", ko: "하이퍼랩스 (이동 타임랩스)" },
   [CameraMotion.Reverse]: { en: "Reverse", ko: "리버스 (역재생)" }
 };
 
+// Grouping for UI
+const MOTION_CATEGORIES = {
+  "Basic Movement": [
+    CameraMotion.Static, CameraMotion.Pan, CameraMotion.Tilt, 
+    CameraMotion.ZoomIn, CameraMotion.ZoomOut, CameraMotion.Pedestal, 
+    CameraMotion.Truck, CameraMotion.Roll
+  ],
+  "Framing & Angles": [
+    CameraMotion.ExtremeCloseUp, CameraMotion.CloseUp, CameraMotion.MediumShot,
+    CameraMotion.WideShot, CameraMotion.EstablishingShot, CameraMotion.LowAngle,
+    CameraMotion.HighAngle, CameraMotion.Overhead, CameraMotion.WormsEye,
+    CameraMotion.EyeLevel, CameraMotion.DutchAngle
+  ],
+  "Dynamic & Action": [
+    CameraMotion.Handheld, CameraMotion.ShakeyCam, CameraMotion.DroneFlyover,
+    CameraMotion.FPV, CameraMotion.FollowShot, CameraMotion.POV,
+    CameraMotion.Gimbal, CameraMotion.Steadicam, CameraMotion.WhipPan,
+    CameraMotion.CrashZoom, CameraMotion.TrackingShot, CameraMotion.Crane, 
+    CameraMotion.Orbit, CameraMotion.DollyZoom
+  ],
+  "Lens, Effect & Time": [
+    CameraMotion.RackFocus, CameraMotion.ShallowFocus, CameraMotion.DeepFocus,
+    CameraMotion.FishEye, CameraMotion.BulletTime,
+    CameraMotion.SlowMotion, CameraMotion.TimeLapse, 
+    CameraMotion.HyperLapse, CameraMotion.Reverse
+  ]
+};
+
 const App: React.FC = () => {
-  // App State - Default to Korean ('ko') unless saved preference exists
+  // App State - Default to Korean ('ko')
   const [language, setLanguage] = useState<Language>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -185,16 +237,16 @@ const App: React.FC = () => {
   const [topic, setTopic] = useState('');
   const [style, setStyle] = useState<VideoStyle>(VideoStyle.Cinematic);
   const [aspectRatio, setAspectRatio] = useState<VideoAspectRatio>(VideoAspectRatio.Wide_16_9);
-  const [motion, setMotion] = useState<CameraMotion>(CameraMotion.DroneFlyover);
+  const [motion, setMotion] = useState<CameraMotion[]>([CameraMotion.DroneFlyover]);
   
-  // Initialized to empty string as per request
   const [totalDuration, setTotalDuration] = useState('');
   const [cutDuration, setCutDuration] = useState('');
   
   const [details, setDetails] = useState('');
   const [suggestLoading, setSuggestLoading] = useState(false);
+  const [autoDesignLoading, setAutoDesignLoading] = useState(false); // NEW STATE
 
-  // Result State with LocalStorage Persistence and Migration Logic
+  // Result State with Robust Migration
   const [loading, setLoading] = useState<LoadingState>({ isLoading: false, message: '' });
   const [results, setResults] = useState<GeneratedPrompt[]>(() => {
     if (typeof window !== 'undefined') {
@@ -203,25 +255,40 @@ const App: React.FC = () => {
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed)) {
-            // Robust Migration & Validation: Ensure items have critical fields
-            return parsed.filter(item => item && item.id && item.originalRequest).map((item: any) => ({
-              ...item,
-              shots: Array.isArray(item.shots) ? item.shots : [], // Ensure shots is array
-              narration: item.narration || "",
-              bgm: item.bgm || "",
-              sfx: item.sfx || ""
-            }));
+            return parsed.map((item: any) => {
+               // Defensive migration: Ensure basic fields exist
+               if (!item.id || !item.originalRequest) return null;
+               
+               // Fix motion if it was a string (old format)
+               let safeMotion = item.originalRequest.motion;
+               if (!Array.isArray(safeMotion)) {
+                 safeMotion = safeMotion ? [safeMotion] : [CameraMotion.Static];
+               }
+               
+               return {
+                 ...item,
+                 originalRequest: {
+                   ...item.originalRequest,
+                   motion: safeMotion
+                 },
+                 characters: Array.isArray(item.characters) ? item.characters : [],
+                 shots: Array.isArray(item.shots) ? item.shots : [],
+                 narration: item.narration || "",
+                 productionNote: item.productionNote || { 
+                   directorVision: "N/A", cinematography: "N/A", artDirection: "N/A", soundDesign: "N/A", editingStyle: "N/A" 
+                 }
+               };
+            }).filter(Boolean) as GeneratedPrompt[]; // Remove nulls
           }
         }
       } catch (e) {
-        console.error('Failed to load history, corrupted data found.', e);
+        console.error('Failed to load history', e);
       }
     }
     return [];
   });
   const [error, setError] = useState<string | null>(null);
 
-  // Persist results whenever they change
   useEffect(() => {
     try {
       localStorage.setItem('veoSparkHistory', JSON.stringify(results));
@@ -230,7 +297,6 @@ const App: React.FC = () => {
     }
   }, [results]);
 
-  // Persist language preference
   useEffect(() => {
     try {
       localStorage.setItem('veoSparkLanguage', language);
@@ -241,29 +307,40 @@ const App: React.FC = () => {
 
   const t = TRANSLATIONS[language];
 
+  const toggleMotion = (m: CameraMotion) => {
+    setMotion(prev => {
+      if (prev.includes(m)) {
+        if (prev.length === 1) return prev;
+        return prev.filter(item => item !== m);
+      } else {
+        return [...prev, m];
+      }
+    });
+  };
+
   const handleLanguageSwitch = async () => {
     const targetLang = language === 'en' ? 'ko' : 'en';
     setIsTranslating(true);
 
     try {
-      // Translate inputs and existing results in parallel
-      const [
-        translatedTopic, 
-        translatedDetails, 
-        translatedResults
-      ] = await Promise.all([
+      const [translatedTopic, translatedDetails] = await Promise.all([
         translateText(topic, targetLang),
         translateText(details, targetLang),
-        Promise.all(results.map(r => translatePromptResult(r, targetLang)))
       ]);
-
+      
+      // Translate most recent 5 results to avoid API limits, keep others as is
+      const recentResults = results.slice(0, 5);
+      const olderResults = results.slice(5);
+      
+      const translatedRecent = await Promise.all(recentResults.map(r => translatePromptResult(r, targetLang)));
+      
       setTopic(translatedTopic);
       setDetails(translatedDetails);
-      setResults(translatedResults); 
+      setResults([...translatedRecent, ...olderResults]);
       setLanguage(targetLang);
     } catch (e) {
       console.error("Translation failed", e);
-      setLanguage(targetLang); // Switch UI even if API fails
+      setLanguage(targetLang);
     } finally {
       setIsTranslating(false);
     }
@@ -288,14 +365,8 @@ const App: React.FC = () => {
 
     try {
        setLoading({ isLoading: true, message: t.thinkingBtn });
-       // Call service
        const result = await generateVideoPrompt(request, language);
-       // Safety check for result integrity
-       if (result && result.id && result.shots) {
-         setResults(prev => [result, ...prev]);
-       } else {
-         throw new Error("Invalid response format");
-       }
+       setResults(prev => [result, ...prev]);
     } catch (err) {
        console.error(err);
        setError(t.errorApi);
@@ -308,7 +379,7 @@ const App: React.FC = () => {
       setTopic(req.topic);
       setStyle(req.style);
       setAspectRatio(req.aspectRatio);
-      setMotion(req.motion);
+      setMotion(Array.isArray(req.motion) ? req.motion : [req.motion]);
       setTotalDuration(req.totalDuration);
       setCutDuration(req.cutDuration);
       setDetails(req.details || '');
@@ -334,6 +405,21 @@ const App: React.FC = () => {
       console.error("Failed to suggest", error);
     } finally {
       setSuggestLoading(false);
+    }
+  };
+  
+  // NEW: Auto Design Handler
+  const handleAutoDesign = async () => {
+    if (!topic.trim()) return;
+    setAutoDesignLoading(true);
+    try {
+      const design = await generateCinematicDesign(topic, style, language);
+      if (design.details) setDetails(design.details);
+      if (design.motion && design.motion.length > 0) setMotion(design.motion);
+    } catch (error) {
+       console.error("Auto design failed", error);
+    } finally {
+       setAutoDesignLoading(false);
     }
   };
 
@@ -458,29 +544,56 @@ const App: React.FC = () => {
                   />
                 </div>
               </div>
+              
+              {/* NEW: AI Auto Design Button */}
+              <button
+                type="button"
+                onClick={handleAutoDesign}
+                disabled={!topic.trim() || autoDesignLoading || isTranslating}
+                className={`w-full py-3 rounded-lg font-medium text-sm flex items-center justify-center gap-2 transition-all border border-dashed ${
+                   !topic.trim() ? 'border-gray-600 text-gray-600 bg-transparent cursor-not-allowed' :
+                   autoDesignLoading ? 'border-emerald-500 bg-emerald-500/10 text-emerald-400 cursor-wait' :
+                   'border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10 hover:border-emerald-500 hover:text-emerald-300'
+                }`}
+              >
+                {autoDesignLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Clapperboard className="w-4 h-4" />}
+                {autoDesignLoading ? t.autoDesigning : t.autoDesignBtn}
+              </button>
 
-              {/* Camera Motion */}
+              {/* Camera Motion (Grouped by Category) */}
               <div className="space-y-2">
                 <label className="flex items-center gap-2 text-sm font-medium text-gray-300">
                   <Camera className="w-4 h-4 text-emerald-400" />
                   {t.motionLabel}
                 </label>
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 max-h-60 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
-                  {Object.values(CameraMotion).map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => setMotion(m)}
-                      disabled={isTranslating}
-                      className={`text-xs py-2 px-1 rounded-lg border transition-all ${
-                        motion === m 
-                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300' 
-                          : 'bg-dark/30 border-white/5 text-gray-400 hover:bg-dark/50'
-                      }`}
-                    >
-                      {MOTION_LABELS[m][language]}
-                    </button>
-                  ))}
+                <div className="bg-dark/30 border border-white/10 rounded-xl p-2 max-h-80 overflow-y-auto scrollbar-thin scrollbar-thumb-white/10">
+                   {Object.entries(MOTION_CATEGORIES).map(([category, motions]) => (
+                      <div key={category} className="mb-4 last:mb-0">
+                        <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2 px-1 tracking-wider">{category}</h4>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                          {motions.map((m) => {
+                            const isSelected = motion.includes(m);
+                            return (
+                              <button
+                                key={m}
+                                type="button"
+                                onClick={() => toggleMotion(m)}
+                                disabled={isTranslating}
+                                className={`text-xs py-2 px-2 rounded-lg border transition-all text-left truncate relative ${
+                                  isSelected 
+                                    ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-medium ring-1 ring-emerald-500/50' 
+                                    : 'bg-dark/50 border-white/5 text-gray-400 hover:bg-dark/80 hover:text-gray-200'
+                                }`}
+                                title={MOTION_LABELS[m][language]}
+                              >
+                                {MOTION_LABELS[m][language]}
+                                {isSelected && <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-emerald-400 rounded-full"></span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                   ))}
                 </div>
               </div>
 

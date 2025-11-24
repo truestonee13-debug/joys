@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { GeneratedPrompt, Language, Shot, Character } from '../types';
-import { Copy, Check, RefreshCw, Trash2, Film, Layers, Edit3, Mic, Users, MessageSquare, Plus, X, Music } from 'lucide-react';
+import { Copy, Check, RefreshCw, Trash2, Film, Layers, Edit3, Mic, Users, MessageSquare, Plus, X, Music, UserPlus, Clapperboard } from 'lucide-react';
 
 interface ResultCardProps {
   result: GeneratedPrompt;
@@ -13,7 +13,7 @@ interface ResultCardProps {
 type ShotSubTab = 'visual' | 'characters' | 'dialogue' | 'audio';
 
 export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRegenerate, language }) => {
-  const [activeTab, setActiveTab] = useState<'full' | 'shots' | 'narration'>('full');
+  const [activeTab, setActiveTab] = useState<'full' | 'shots' | 'narration' | 'characters' | 'notes'>('full');
   const [activeShotId, setActiveShotId] = useState<string>(result.shots[0]?.id || '');
   const [shotSubTab, setShotSubTab] = useState<ShotSubTab>('visual');
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
@@ -21,11 +21,13 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
   // Local state for editable content
   const [editableShots, setEditableShots] = useState<Shot[]>(result.shots);
   const [editableNarration, setEditableNarration] = useState<string>(result.narration || '');
+  const [editableCharacters, setEditableCharacters] = useState<Character[]>(result.characters || []);
 
   // Update local state if result changes (e.g. after translation)
   useEffect(() => {
     setEditableShots(result.shots);
     setEditableNarration(result.narration || '');
+    setEditableCharacters(result.characters || []);
     if (result.shots.length > 0 && !result.shots.find(s => s.id === activeShotId)) {
       setActiveShotId(result.shots[0].id);
     }
@@ -37,13 +39,70 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
     setTimeout(() => setCopiedSection(null), 2000);
   };
 
+  const getShotFullText = (shot: Shot) => {
+    const labels = {
+      visual: language === 'en' ? '[Visuals]' : '[장면 묘사]',
+      tech: language === 'en' ? '[Technical]' : '[기술적 묘사]',
+      char: language === 'en' ? '[Characters]' : '[등장인물]',
+      dial: language === 'en' ? '[Dialogue]' : '[대사]',
+      lip: language === 'en' ? '[Lip Sync (D-ID Optimized)]' : '[입모양 가이드 (D-ID 최적화)]',
+      audio: language === 'en' ? '[Audio]' : '[오디오]',
+      none: language === 'en' ? 'None' : '없음'
+    };
+
+    const charText = shot.characters.length > 0 
+      ? shot.characters.map(c => `- ${c.name}: ${c.description}`).join('\n') 
+      : labels.none;
+
+    return `Shot ${shot.index} (${shot.duration})
+----------------------------------------
+${labels.visual}
+${shot.visualPrompt}
+
+${labels.tech}
+${shot.technicalPrompt}
+
+${labels.char}
+${charText}
+
+${labels.dial}
+${shot.dialogue || labels.none}
+
+${labels.lip}
+${shot.lipSync || labels.none}
+
+${labels.audio}
+BGM: ${shot.bgm || labels.none}
+SFX: ${shot.sfx || labels.none}`;
+  };
+  
+  const getProductionNoteText = () => {
+    const pn = result.productionNote;
+    if (!pn) return "";
+    return `[Director's Vision]
+${pn.directorVision}
+
+[Cinematography & Color]
+${pn.cinematography}
+
+[Art Direction]
+${pn.artDirection}
+
+[Sound Design]
+${pn.soundDesign}
+
+[Editing Style]
+${pn.editingStyle}`;
+  };
+
+  // --- Handlers for Shots ---
   const handleShotEdit = (id: string, field: keyof Shot, value: any) => {
     setEditableShots(prev => prev.map(shot => 
       shot.id === id ? { ...shot, [field]: value } : shot
     ));
   };
 
-  const handleCharacterEdit = (shotId: string, charIndex: number, field: keyof Character, value: string) => {
+  const handleShotCharacterEdit = (shotId: string, charIndex: number, field: keyof Character, value: string) => {
     setEditableShots(prev => prev.map(shot => {
       if (shot.id !== shotId) return shot;
       const newChars = [...shot.characters];
@@ -52,14 +111,14 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
     }));
   };
 
-  const handleAddCharacter = (shotId: string) => {
+  const handleAddShotCharacter = (shotId: string) => {
     setEditableShots(prev => prev.map(shot => {
       if (shot.id !== shotId) return shot;
       return { ...shot, characters: [...shot.characters, { name: '', description: '' }] };
     }));
   };
 
-  const handleDeleteCharacter = (shotId: string, charIndex: number) => {
+  const handleDeleteShotCharacter = (shotId: string, charIndex: number) => {
     setEditableShots(prev => prev.map(shot => {
       if (shot.id !== shotId) return shot;
       const newChars = shot.characters.filter((_, i) => i !== charIndex);
@@ -67,10 +126,29 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
     }));
   };
 
+  // --- Handlers for Global Characters ---
+  const handleGlobalCharEdit = (index: number, field: keyof Character, value: string) => {
+    setEditableCharacters(prev => {
+      const newChars = [...prev];
+      newChars[index] = { ...newChars[index], [field]: value };
+      return newChars;
+    });
+  };
+
+  const handleAddGlobalChar = () => {
+    setEditableCharacters(prev => [...prev, { name: '', description: '' }]);
+  };
+
+  const handleDeleteGlobalChar = (index: number) => {
+    setEditableCharacters(prev => prev.filter((_, i) => i !== index));
+  };
+
   const activeShot = editableShots.find(s => s.id === activeShotId);
 
-  // Combine prompts for a "One Click" copy suitable for many tools
-  const combinedPrompt = `${result.visualPrompt} --style ${result.originalRequest.style} --ar ${result.originalRequest.aspectRatio} --motion ${result.originalRequest.motion}. Technical details: ${result.technicalPrompt}`;
+  const motionText = Array.isArray(result.originalRequest.motion) 
+    ? result.originalRequest.motion.join(', ') : result.originalRequest.motion;
+    
+  const combinedPrompt = `${result.visualPrompt} --style ${result.originalRequest.style} --ar ${result.originalRequest.aspectRatio} --motion ${motionText}. Technical details: ${result.technicalPrompt}`;
 
   const labels = {
     en: {
@@ -82,6 +160,8 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
       tabFull: "Full Overview",
       tabShots: "Shot Breakdown",
       tabNarration: "Narration",
+      tabCharacters: "Characters",
+      tabNotes: "Production Notes",
       shot: "Shot",
       duration: "Duration",
       editPlaceholder: "Edit this prompt...",
@@ -94,12 +174,20 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
       charDesc: "Description",
       addChar: "Add Character",
       dialoguePlaceholder: "Enter dialogue e.g. 'John: [Happy] Hello!'...",
+      lipSyncLabel: "Lip Sync & Facial Emphasis",
+      lipSyncPlaceholder: "D-ID/HeyGen Optimized: e.g. 'Viseme O, lips rounded', 'Jaw drop for A'...",
       noDialogue: "No dialogue in this shot.",
       deleteChar: "Remove Character",
       bgmLabel: "BGM (Background Music)",
       sfxLabel: "SFX (Sound Effects)",
       bgmPlaceholder: "Describe the mood, genre, or tempo...",
-      sfxPlaceholder: "Describe specific sound effects..."
+      sfxPlaceholder: "Describe specific sound effects...",
+      copyShotFull: "Copy All Shot Info",
+      globalCharTitle: "Global Character Profiles",
+      globalCharDesc: "Define the main characters here to ensure consistency across all shots. You can edit or add new ones.",
+      addGlobalChar: "Add New Character",
+      noteTitle: "Director & Crew Analysis",
+      noteDesc: "Comprehensive production guide from the AI Creative Team."
     },
     ko: {
       visualPrompt: "비주얼 프롬프트",
@@ -110,6 +198,8 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
       tabFull: "전체 개요",
       tabShots: "컷별 편집 (Shots)",
       tabNarration: "나레이션",
+      tabCharacters: "등장인물",
+      tabNotes: "프로덕션 노트",
       shot: "샷",
       duration: "길이",
       editPlaceholder: "프롬프트 수정...",
@@ -122,12 +212,20 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
       charDesc: "외형 묘사",
       addChar: "인물 추가",
       dialoguePlaceholder: "대사를 입력하세요. 예: '철수: [기쁨] 안녕!'...",
+      lipSyncLabel: "입모양 및 안면 근육 강조 (Lip Sync)",
+      lipSyncPlaceholder: "D-ID/HeyGen 최적화: 예: '입술 둥글게(Viseme O)', '턱 벌림(Viseme A)', '미세한 미소'...",
       noDialogue: "이 샷에는 대사가 없습니다.",
       deleteChar: "인물 삭제",
       bgmLabel: "BGM (배경음악)",
       sfxLabel: "SFX (음향효과)",
       bgmPlaceholder: "분위기, 장르, 템포 등을 묘사하세요...",
-      sfxPlaceholder: "구체적인 효과음을 묘사하세요..."
+      sfxPlaceholder: "구체적인 효과음을 묘사하세요...",
+      copyShotFull: "샷 전체 정보 복사",
+      globalCharTitle: "전체 등장인물 프로필",
+      globalCharDesc: "영상 전체에 일관되게 등장하는 주요 인물들입니다. 자유롭게 수정하거나 추가할 수 있습니다.",
+      addGlobalChar: "새 등장인물 추가",
+      noteTitle: "감독 및 제작진 분석",
+      noteDesc: "AI 크리에이티브 팀이 제안하는 종합 프로덕션 가이드입니다."
     }
   };
 
@@ -159,10 +257,10 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
       </div>
 
       {/* Tabs Navigation */}
-      <div className="flex border-b border-white/5 bg-dark/20">
+      <div className="flex border-b border-white/5 bg-dark/20 overflow-x-auto">
         <button
           onClick={() => setActiveTab('full')}
-          className={`flex-1 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-all ${
+          className={`flex-1 py-3 px-2 text-sm font-medium flex items-center justify-center gap-2 transition-all whitespace-nowrap ${
             activeTab === 'full' 
               ? 'text-white border-b-2 border-primary bg-white/5' 
               : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
@@ -172,8 +270,30 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
           {t.tabFull}
         </button>
         <button
+          onClick={() => setActiveTab('notes')}
+          className={`flex-1 py-3 px-2 text-sm font-medium flex items-center justify-center gap-2 transition-all whitespace-nowrap ${
+            activeTab === 'notes' 
+              ? 'text-white border-b-2 border-orange-500 bg-white/5' 
+              : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+          }`}
+        >
+          <Clapperboard className="w-4 h-4" />
+          {t.tabNotes}
+        </button>
+        <button
+          onClick={() => setActiveTab('characters')}
+          className={`flex-1 py-3 px-2 text-sm font-medium flex items-center justify-center gap-2 transition-all whitespace-nowrap ${
+            activeTab === 'characters' 
+              ? 'text-white border-b-2 border-green-500 bg-white/5' 
+              : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+          }`}
+        >
+          <Users className="w-4 h-4" />
+          {t.tabCharacters}
+        </button>
+        <button
           onClick={() => setActiveTab('shots')}
-          className={`flex-1 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-all ${
+          className={`flex-1 py-3 px-2 text-sm font-medium flex items-center justify-center gap-2 transition-all whitespace-nowrap ${
             activeTab === 'shots' 
               ? 'text-white border-b-2 border-secondary bg-white/5' 
               : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
@@ -184,7 +304,7 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
         </button>
         <button
           onClick={() => setActiveTab('narration')}
-          className={`flex-1 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-all ${
+          className={`flex-1 py-3 px-2 text-sm font-medium flex items-center justify-center gap-2 transition-all whitespace-nowrap ${
             activeTab === 'narration' 
               ? 'text-white border-b-2 border-purple-500 bg-white/5' 
               : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
@@ -242,6 +362,98 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
              </div>
           </div>
         )}
+        
+        {activeTab === 'notes' && (
+          // Production Notes Tab (NEW)
+          <div className="space-y-6 animate-fade-in">
+             <div className="flex justify-between items-start">
+               <div className="flex flex-col gap-2">
+                 <h4 className="text-sm font-bold text-orange-400 uppercase tracking-wider flex items-center gap-2">
+                   <Clapperboard className="w-4 h-4" /> {t.noteTitle}
+                 </h4>
+                 <p className="text-xs text-gray-400">{t.noteDesc}</p>
+               </div>
+               <button 
+                  onClick={() => handleCopy(getProductionNoteText(), 'notes')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500/10 hover:bg-orange-500/20 border border-orange-500/30 rounded-lg text-orange-400 hover:text-white transition-colors text-xs font-medium"
+                >
+                  {copiedSection === 'notes' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                  {t.copy}
+                </button>
+             </div>
+
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {result.productionNote && Object.entries(result.productionNote).map(([key, value]) => (
+                  <div key={key} className="bg-dark/30 border border-white/5 rounded-lg p-4 space-y-2">
+                     <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                       {key.replace(/([A-Z])/g, ' $1').trim()}
+                     </div>
+                     <p className="text-sm text-gray-300 leading-relaxed">{value}</p>
+                  </div>
+                ))}
+             </div>
+          </div>
+        )}
+
+        {activeTab === 'characters' && (
+          // Global Characters Tab
+          <div className="space-y-6 animate-fade-in">
+             <div className="flex flex-col gap-2">
+               <h4 className="text-sm font-bold text-green-400 uppercase tracking-wider flex items-center gap-2">
+                 <Users className="w-4 h-4" /> {t.globalCharTitle}
+               </h4>
+               <p className="text-xs text-gray-400">{t.globalCharDesc}</p>
+             </div>
+
+             <div className="grid grid-cols-1 gap-4">
+                {editableCharacters.map((char, idx) => (
+                  <div key={idx} className="bg-dark/30 border border-white/5 rounded-lg p-4 space-y-3 shadow-sm relative">
+                      <div className="flex justify-between items-start">
+                        <div className="text-xs font-semibold text-green-400 uppercase tracking-wider mb-1">{t.charName}</div>
+                        <div className="flex gap-2">
+                           <button 
+                            onClick={() => handleCopy(`${char.name}: ${char.description}`, `global-char-${idx}`)}
+                            className="text-gray-500 hover:text-white transition-colors p-1"
+                            title="Copy Character Info"
+                          >
+                             {copiedSection === `global-char-${idx}` ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteGlobalChar(idx)}
+                            className="text-gray-600 hover:text-red-400 transition-colors p-1"
+                            title={t.deleteChar}
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                      <input 
+                        type="text" 
+                        value={char.name}
+                        onChange={(e) => handleGlobalCharEdit(idx, 'name', e.target.value)}
+                        className="w-full bg-dark/50 border border-white/10 rounded px-3 py-2 text-sm text-white focus:ring-2 focus:ring-green-500/50 outline-none"
+                        placeholder="Character Name"
+                      />
+                      
+                      <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{t.charDesc}</div>
+                      <textarea 
+                        value={char.description}
+                        onChange={(e) => handleGlobalCharEdit(idx, 'description', e.target.value)}
+                        className="w-full h-24 bg-dark/50 border border-white/10 rounded px-3 py-2 text-sm text-gray-300 focus:ring-2 focus:ring-green-500/50 outline-none resize-none leading-relaxed"
+                        placeholder="Description of appearance, clothing..."
+                      />
+                  </div>
+                ))}
+                
+                <button 
+                  onClick={handleAddGlobalChar}
+                  className="w-full py-4 border border-dashed border-white/10 rounded-lg text-sm text-gray-400 hover:text-white hover:bg-white/5 transition-all flex items-center justify-center gap-2 hover:border-green-500/50"
+                >
+                  <UserPlus className="w-5 h-5" /> {t.addGlobalChar}
+                </button>
+             </div>
+          </div>
+        )}
 
         {activeTab === 'shots' && (
           // Shot Breakdown Tab
@@ -266,7 +478,17 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
             {activeShot && (
               <div className="animate-fade-in space-y-5">
                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs text-gray-400">
-                    <span className="bg-white/5 px-2 py-1 rounded border border-white/5 self-start">{t.duration}: <span className="text-white font-semibold">{activeShot.duration}</span></span>
+                    <div className="flex items-center gap-3">
+                      <span className="bg-white/5 px-2 py-1 rounded border border-white/5">{t.duration}: <span className="text-white font-semibold">{activeShot.duration}</span></span>
+                      <button 
+                        onClick={() => handleCopy(getShotFullText(activeShot), `full-shot-${activeShot.id}`)}
+                        className="flex items-center gap-1.5 px-2 py-1 bg-primary/10 hover:bg-primary/20 border border-primary/20 rounded text-primary hover:text-white transition-colors"
+                        title={t.copyShotFull}
+                      >
+                        {copiedSection === `full-shot-${activeShot.id}` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        <span className="hidden sm:inline">{t.copyShotFull}</span>
+                      </button>
+                    </div>
                     
                     {/* Sub-tabs for Active Shot */}
                     <div className="flex bg-dark/50 rounded-lg p-1 border border-white/5 overflow-x-auto">
@@ -339,14 +561,14 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
                   </div>
                 )}
 
-                {/* CHARACTERS SUB-TAB */}
+                {/* CHARACTERS SUB-TAB (Per Shot) */}
                 {shotSubTab === 'characters' && (
                   <div className="animate-fade-in space-y-4">
                     {activeShot.characters.length === 0 ? (
                        <div className="text-center py-8 bg-dark/30 rounded-lg border border-dashed border-white/10">
                           <p className="text-gray-500 text-sm mb-3">{language === 'en' ? 'No characters listed for this shot.' : '이 샷에 등록된 등장인물이 없습니다.'}</p>
                           <button 
-                            onClick={() => handleAddCharacter(activeShot.id)}
+                            onClick={() => handleAddShotCharacter(activeShot.id)}
                             className="px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded text-xs text-gray-300 transition-colors inline-flex items-center gap-1"
                           >
                             <Plus className="w-3 h-3" /> {t.addChar}
@@ -359,7 +581,7 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
                              <div className="flex justify-between items-start">
                                 <div className="text-xs font-semibold text-blue-400 uppercase tracking-wider mb-1">{t.charName}</div>
                                 <button 
-                                  onClick={() => handleDeleteCharacter(activeShot.id, idx)}
+                                  onClick={() => handleDeleteShotCharacter(activeShot.id, idx)}
                                   className="text-gray-600 hover:text-red-400 transition-colors p-1"
                                   title={t.deleteChar}
                                 >
@@ -369,7 +591,7 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
                              <input 
                                 type="text" 
                                 value={char.name}
-                                onChange={(e) => handleCharacterEdit(activeShot.id, idx, 'name', e.target.value)}
+                                onChange={(e) => handleShotCharacterEdit(activeShot.id, idx, 'name', e.target.value)}
                                 className="w-full bg-dark/50 border border-white/10 rounded px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500/50 outline-none"
                                 placeholder="Character Name"
                              />
@@ -377,14 +599,14 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
                              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{t.charDesc}</div>
                              <textarea 
                                 value={char.description}
-                                onChange={(e) => handleCharacterEdit(activeShot.id, idx, 'description', e.target.value)}
+                                onChange={(e) => handleShotCharacterEdit(activeShot.id, idx, 'description', e.target.value)}
                                 className="w-full h-20 bg-dark/50 border border-white/10 rounded px-3 py-2 text-sm text-gray-300 focus:ring-2 focus:ring-blue-500/50 outline-none resize-none"
                                 placeholder="Description of appearance, clothing..."
                              />
                           </div>
                         ))}
                         <button 
-                          onClick={() => handleAddCharacter(activeShot.id)}
+                          onClick={() => handleAddShotCharacter(activeShot.id)}
                           className="w-full py-2 border border-dashed border-white/10 rounded-lg text-xs text-gray-500 hover:text-white hover:bg-white/5 transition-all flex items-center justify-center gap-2"
                         >
                           <Plus className="w-3 h-3" /> {t.addChar}
@@ -397,6 +619,7 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
                 {/* DIALOGUE SUB-TAB */}
                 {shotSubTab === 'dialogue' && (
                   <div className="animate-fade-in space-y-4">
+                     {/* Spoken Dialogue */}
                      <div className="space-y-2">
                       <div className="flex justify-between items-center">
                         <label className="flex items-center gap-2 text-xs font-semibold text-pink-400 uppercase tracking-wider">
@@ -414,11 +637,33 @@ export const ResultCard: React.FC<ResultCardProps> = ({ result, onDelete, onRege
                         value={activeShot.dialogue}
                         onChange={(e) => handleShotEdit(activeShot.id, 'dialogue', e.target.value)}
                         placeholder={t.dialoguePlaceholder}
-                        className="w-full h-40 bg-dark/30 border border-white/10 rounded-lg p-4 text-sm text-white focus:ring-2 focus:ring-pink-500/50 outline-none resize-none transition-all leading-relaxed"
+                        className="w-full h-32 bg-dark/30 border border-white/10 rounded-lg p-4 text-sm text-white focus:ring-2 focus:ring-pink-500/50 outline-none resize-none transition-all leading-relaxed"
                       />
                        <p className="text-xs text-gray-500 italic">
                          {activeShot.dialogue ? "" : t.noDialogue}
                        </p>
+                    </div>
+
+                     {/* Lip Sync Instruction (NEW) */}
+                    <div className="space-y-2 border-t border-white/5 pt-4">
+                      <div className="flex justify-between items-center">
+                        <label className="flex items-center gap-2 text-xs font-semibold text-rose-400 uppercase tracking-wider">
+                           {t.lipSyncLabel}
+                        </label>
+                         <button 
+                          onClick={() => handleCopy(activeShot.lipSync, `lipsync-${activeShot.id}`)}
+                          className="flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors"
+                        >
+                          {copiedSection === `lipsync-${activeShot.id}` ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+                          {copiedSection === `lipsync-${activeShot.id}` ? t.copied : t.copy}
+                        </button>
+                      </div>
+                      <textarea 
+                        value={activeShot.lipSync}
+                        onChange={(e) => handleShotEdit(activeShot.id, 'lipSync', e.target.value)}
+                        placeholder={t.lipSyncPlaceholder}
+                        className="w-full h-20 bg-dark/30 border border-white/10 rounded-lg p-3 text-sm text-gray-300 focus:ring-2 focus:ring-rose-500/50 outline-none resize-none transition-all"
+                      />
                     </div>
                   </div>
                 )}

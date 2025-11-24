@@ -55,35 +55,53 @@ export enum VideoStyle {
 }
 
 export enum CameraMotion {
-  // Basic
+  // 1. Basic Movement
   Static = "Static",
   Pan = "Pan",
   Tilt = "Tilt",
   ZoomIn = "Zoom In",
   ZoomOut = "Zoom Out",
-  
-  // Advanced Cinematic
+  Pedestal = "Pedestal (Up/Down)",
+  Truck = "Truck (Left/Right)",
+  Roll = "Camera Roll",
+
+  // 2. Framing & Angles (New)
+  ExtremeCloseUp = "Extreme Close-Up",
+  CloseUp = "Close-Up",
+  MediumShot = "Medium Shot",
+  WideShot = "Wide Shot",
+  EstablishingShot = "Establishing Shot",
+  LowAngle = "Low Angle",
+  HighAngle = "High Angle",
+  Overhead = "Overhead / God's Eye",
+  WormsEye = "Worm's Eye View",
+  EyeLevel = "Eye Level",
+  DutchAngle = "Dutch Angle",
+
+  // 3. Advanced & Dynamic
   DollyZoom = "Dolly Zoom",
   TrackingShot = "Tracking Shot",
-  Truck = "Truck (Left/Right)",
-  Pedestal = "Pedestal (Up/Down)",
   Crane = "Crane / Jib Shot",
   Orbit = "Orbit / Arc",
-  DutchAngle = "Dutch Angle",
-  WhipPan = "Whip Pan",
-  CrashZoom = "Crash Zoom",
-  Roll = "Camera Roll",
-  
-  // Dynamic / Action
   Handheld = "Handheld",
   ShakeyCam = "Shakey Cam (Chaos)",
   DroneFlyover = "Drone Flyover",
   FPV = "FPV Speed Drone",
-  BulletTime = "Bullet Time",
   FollowShot = "Follow Shot (Behind)",
   POV = "First Person View (POV)",
-  
-  // Time
+  Gimbal = "Gimbal Smooth",
+  Steadicam = "Steadicam",
+  WhipPan = "Whip Pan",
+  CrashZoom = "Crash Zoom",
+
+  // 4. Lens & Effects (New)
+  RackFocus = "Rack Focus",
+  DeepFocus = "Deep Focus",
+  ShallowFocus = "Shallow Focus (Bokeh)",
+  FishEye = "Fish Eye Lens",
+  BulletTime = "Bullet Time",
+
+  // 5. Time & Speed
   SlowMotion = "Slow Motion",
   TimeLapse = "Time-Lapse",
   HyperLapse = "Hyper-Lapse",
@@ -94,7 +112,7 @@ export interface PromptRequest {
   topic: string;
   style: VideoStyle;
   aspectRatio: VideoAspectRatio;
-  motion: CameraMotion;
+  motion: CameraMotion[]; // Updated to Array
   totalDuration: string;
   cutDuration: string;
   details?: string;
@@ -113,8 +131,17 @@ export interface Shot {
   duration: string;
   characters: Character[];
   dialogue: string;
+  lipSync: string; // New field: Visual instruction for mouth movement
   bgm: string; // Background Music recommendation
   sfx: string; // Sound Effects recommendation
+}
+
+export interface ProductionNote {
+  directorVision: string; // Overall direction style (e.g. Nolan-esque)
+  cinematography: string; // Lighting, Lens choices, Color Palette
+  artDirection: string; // Set design, props, textures
+  soundDesign: string; // Audio atmosphere philosophy
+  editingStyle: string; // Pacing and rhythm
 }
 
 export interface GeneratedPrompt {
@@ -124,6 +151,8 @@ export interface GeneratedPrompt {
   technicalPrompt: string; // Camera settings, lighting, render engine
   negativePrompt?: string;
   narration: string; // Voiceover script with emotion tags
+  characters: Character[]; // Global list of main characters
+  productionNote: ProductionNote; // New field for expert analysis
   shots: Shot[]; // Array of individual cuts
   timestamp: number;
   originalRequest: PromptRequest;

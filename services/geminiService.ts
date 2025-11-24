@@ -1,11 +1,8 @@
 
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { PromptRequest, GeneratedPrompt, Language, Shot, Character } from "../types";
+import { PromptRequest, GeneratedPrompt, Language, Shot, Character, CameraMotion, ProductionNote } from "../types";
 
 const apiKey = process.env.API_KEY || "";
-
-// Initialize the Gemini API
-const ai = new GoogleGenAI({ apiKey });
 
 const promptSchema: Schema = {
   type: Type.OBJECT,
@@ -16,7 +13,7 @@ const promptSchema: Schema = {
     },
     visualPrompt: {
       type: Type.STRING,
-      description: "The main descriptive prompt detailing the subject, action, environment, and atmosphere. Use vivid language suitable for Sora/Veo.",
+      description: "The main descriptive prompt detailing the subject, action, environment, and atmosphere. Use vivid language suitable for Sora/Veo. Focus on objective visual elements.",
     },
     technicalPrompt: {
       type: Type.STRING,
@@ -24,11 +21,35 @@ const promptSchema: Schema = {
     },
     negativePrompt: {
       type: Type.STRING,
-      description: "Elements to exclude to ensure high quality (e.g., blur, distortion, low quality).",
+      description: "Elements to exclude to ensure high quality (e.g., blur, distortion, low quality, text overlays).",
     },
     narration: {
       type: Type.STRING,
-      description: "A voiceover script for the video. It MUST include emotion/tone tags in brackets at the beginning of sentences (e.g., [Mysterious], [Excited], [Calm]).",
+      description: "A voiceover script for the video. CRITICAL: You MUST include emotion/tone tags (e.g., [Whisper], [Excited], [Calm]) before lines. The length must match the video's total duration exactly based on a standard speaking rate.",
+    },
+    characters: {
+      type: Type.ARRAY,
+      description: "List of MAIN characters appearing in the video with consistent visual descriptions.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING, description: "Character Name (e.g. 'Neo', 'The Old Man')" },
+          description: { type: Type.STRING, description: "Detailed visual appearance (age, clothing, face, style) to ensure consistency." }
+        },
+        required: ["name", "description"]
+      }
+    },
+    productionNote: {
+      type: Type.OBJECT,
+      description: "A comprehensive guide designed by a world-class production team (Director, DP, Art Director, Sound Designer).",
+      properties: {
+        directorVision: { type: Type.STRING, description: "Directorial style reference (e.g., 'Tension like Hitchcock', 'Grandeur like Nolan')." },
+        cinematography: { type: Type.STRING, description: "Detailed guide on Lighting (High-key/Low-key), Color Palette (Teal&Orange, Monochrome), and Lens choices." },
+        artDirection: { type: Type.STRING, description: "Set design, textures, costumes, and overall atmosphere." },
+        soundDesign: { type: Type.STRING, description: "Audio landscape philosophy, mixing BGM and SFX strategy." },
+        editingStyle: { type: Type.STRING, description: "Rhythm and pacing of the cuts (e.g. 'Fast-paced montage', 'Slow, meditative flow')." }
+      },
+      required: ["directorVision", "cinematography", "artDirection", "soundDesign", "editingStyle"]
     },
     shots: {
       type: Type.ARRAY,
@@ -54,112 +75,203 @@ const promptSchema: Schema = {
               required: ["name", "description"]
             }
           },
-          dialogue: { type: Type.STRING, description: "Dialogue spoken in this shot, if any. Include emotion tags (e.g., 'John: [Angry] Stop!'). Leave empty if no dialogue." }
+          dialogue: { type: Type.STRING, description: "Dialogue spoken in this shot, if any. Include emotion tags (e.g., 'John: [Angry] Stop!'). Leave empty if no dialogue." },
+          lipSync: { type: Type.STRING, description: "Technical instructions for AI Lip-Sync platforms (e.g. D-ID). Describe specific Visemes (mouth shapes), jaw aperture, and facial muscle tension to match the dialogue phonetics." }
         },
-        required: ["index", "visualPrompt", "technicalPrompt", "duration", "bgm", "sfx", "characters", "dialogue"]
+        required: ["index", "visualPrompt", "technicalPrompt", "duration", "bgm", "sfx", "characters", "dialogue", "lipSync"]
       }
     }
   },
-  required: ["title", "visualPrompt", "technicalPrompt", "narration", "shots"],
+  required: ["title", "visualPrompt", "technicalPrompt", "narration", "characters", "productionNote", "shots"],
 };
 
 /**
  * Safe ID generator that works in all environments (http/https)
  */
 const generateId = (): string => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    try {
-      return crypto.randomUUID();
-    } catch (e) {
-      // Fallback if crypto fails
-    }
-  }
-  return Date.now().toString(36) + Math.random().toString(36).substr(2);
+  const timestamp = Date.now().toString(36);
+  const randomStr = Math.random().toString(36).substring(2, 10);
+  return `${timestamp}-${randomStr}`;
 };
 
 /**
- * robustly extracts JSON from text by counting braces
+ * ROBUST JSON Parser v3
+ * Combines Regex extraction, Brace Counting, and basic string cleanup
  */
 const cleanAndParseJSON = (text: string) => {
   if (!text) return {};
 
-  try {
-    // 1. Try direct parse first
-    return JSON.parse(text);
-  } catch (e) {
-    // 2. Extract JSON object using brace counting (handles nested structures correctly)
-    const startIndex = text.indexOf('{');
-    if (startIndex === -1) throw new Error("No JSON object found in response");
+  // 1. Try cleaning generic markdown blocks first
+  let cleaned = text;
+  const markdownRegex = /```(?:json)?\s*([\s\S]*?)\s*```/i;
+  const match = text.match(markdownRegex);
+  if (match && match[1]) {
+    cleaned = match[1];
+  }
 
-    let braceCount = 0;
-    let endIndex = -1;
-    
-    for (let i = startIndex; i < text.length; i++) {
-      if (text[i] === '{') {
-        braceCount++;
-      } else if (text[i] === '}') {
-        braceCount--;
-        if (braceCount === 0) {
-          endIndex = i;
-          break;
+  // 2. Attempt strict parse on cleaned text
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    // Continue to advanced extraction
+  }
+
+  // 3. Brace Counting Strategy (Most Robust for nested objects)
+  try {
+    const firstOpen = text.indexOf('{');
+    if (firstOpen !== -1) {
+      let balance = 0;
+      let lastClose = -1;
+      let insideString = false;
+      let escape = false;
+
+      for (let i = firstOpen; i < text.length; i++) {
+        const char = text[i];
+        
+        if (escape) {
+          escape = false;
+          continue;
+        }
+
+        if (char === '\\') {
+          escape = true;
+          continue;
+        }
+
+        if (char === '"') {
+          insideString = !insideString;
+          continue;
+        }
+
+        if (!insideString) {
+          if (char === '{') {
+            balance++;
+          } else if (char === '}') {
+            balance--;
+            if (balance === 0) {
+              lastClose = i;
+              break; 
+            }
+          }
+        }
+      }
+
+      if (lastClose !== -1) {
+        const jsonStr = text.substring(firstOpen, lastClose + 1);
+        try {
+           return JSON.parse(jsonStr);
+        } catch(e) {
+           // Try a simple fix for trailing commas or newlines
+           const fixed = jsonStr.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']').replace(/\n/g, "\\n");
+           return JSON.parse(fixed);
         }
       }
     }
-
-    if (endIndex !== -1) {
-      const jsonString = text.substring(startIndex, endIndex + 1);
-      try {
-        return JSON.parse(jsonString);
-      } catch (parseError) {
-        console.error("Failed to parse extracted JSON string:", jsonString.substring(0, 100) + "...");
-        throw parseError;
-      }
-    }
-    
-    throw new Error("Could not find closing brace for JSON object");
+  } catch (e) {
+    console.error("Brace counting parse failed", e);
   }
+
+  // 4. Fallback: Simple First/Last Brace
+  try {
+    const firstOpen = text.indexOf('{');
+    const lastClose = text.lastIndexOf('}');
+    if (firstOpen !== -1 && lastClose !== -1 && lastClose > firstOpen) {
+      const jsonStr = text.substring(firstOpen, lastClose + 1);
+      return JSON.parse(jsonStr);
+    }
+  } catch (e) {
+    console.error("Fallback parse failed", e);
+  }
+
+  console.error("JSON Parsing Failed. Raw Text:", text);
+  throw new Error("Failed to parse valid JSON from AI response.");
 };
 
 const parseDuration = (durationStr: string): number => {
   if (!durationStr) return 0;
-  // Remove non-numeric chars except dot
   const num = parseFloat(durationStr.replace(/[^\d.]/g, ''));
   if (isNaN(num)) return 0;
-  
-  // Simple heuristic: if string contains 'm' treat as minutes, otherwise seconds
   if (durationStr.toLowerCase().includes('m') && !durationStr.toLowerCase().includes('ms')) {
     return num * 60;
   }
   return num;
 };
 
-export const generateDetailSuggestions = async (topic: string, style: string, language: Language): Promise<string> => {
-  if (!topic) return "";
+// --- NEW: AI Director Auto-Design (Input Helper) ---
+export const generateCinematicDesign = async (topic: string, style: string, language: Language): Promise<{ details: string, motion: CameraMotion[] }> => {
+  if (!topic) return { details: "", motion: [] };
 
+  const ai = new GoogleGenAI({ apiKey });
   const modelId = "gemini-2.5-flash";
   const targetLanguage = language === 'ko' ? 'Korean' : 'English';
 
   const prompt = `
-    Role: A creative synergy of world-renowned Film Directors (e.g., Nolan, Kubrick, Tarantino), Art Directors (e.g., Wes Anderson's color palettes, Blade Runner aesthetics), and Music Directors (focusing on visual rhythm and mood).
+    Role: A creative collective of Oscar-winning Film Directors, Cinematographers (DOP), and Colorists.
+    Task: Analyze the topic '${topic}' and style '${style}'. 
+    1. Design the PERFECT visual atmosphere (Lighting, Color Grading, Texture).
+    2. Select the BEST Camera Motions to enhance the storytelling.
     
-    Task: Suggest 1 concise, artistic, and impactful sentence describing specific lighting, color grading, atmosphere, or rhythmic visual texture that would elevate the provided video topic to a masterpiece.
+    Output Format: JSON ONLY.
+    {
+      "details": "A string describing specific lighting (e.g. Chiaroscuro), color palette (e.g. Teal & Orange), and lens choice.",
+      "motion": ["List", "Of", "CameraMotion", "Enum", "Values"]
+    }
     
-    Context:
-    - Topic: ${topic}
-    - Style: ${style}
+    Choose motion values strictly from this list: 
+    [${Object.values(CameraMotion).join(", ")}]
     
-    Instructions:
-    1. Draw inspiration from legendary cinematic techniques and artistic signatures.
-    2. Focus on sensory details: "Chiaroscuro lighting," "Neon-noir reflections," "Pastel symmetrical composition," or "Frenetic, syncopated visual rhythm."
-    3. Be highly specific and evocative.
-    4. Output Language: ${targetLanguage}.
-    5. Return ONLY the suggestion text.
+    Language for 'details': ${targetLanguage}.
   `;
 
   try {
     const response = await ai.models.generateContent({
       model: modelId,
       contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        safetySettings: [{ category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" }]
+      }
+    });
+
+    const data = cleanAndParseJSON(response.text || "{}");
+    return {
+      details: data.details || "",
+      motion: Array.isArray(data.motion) ? data.motion : [CameraMotion.Static]
+    };
+  } catch (error) {
+    console.error("Error generating cinematic design:", error);
+    return { details: "", motion: [] };
+  }
+};
+
+export const generateDetailSuggestions = async (topic: string, style: string, language: Language): Promise<string> => {
+  if (!topic) return "";
+
+  const ai = new GoogleGenAI({ apiKey });
+  const modelId = "gemini-2.5-flash";
+  const targetLanguage = language === 'ko' ? 'Korean' : 'English';
+
+  const prompt = `
+    Role: A creative synergy of world-renowned Film Directors, Art Directors, and Music Directors.
+    Task: Suggest 1 concise, artistic sentence describing specific lighting, color grading, atmosphere, AND high-fidelity technical specifications (e.g. 8k, sharp focus, hyper-detailed, crystal clear) to significantly upgrade the visual quality.
+    Context: Topic '${topic}', Style '${style}'.
+    Output Language: ${targetLanguage}.
+    Safety: Avoid any NSFW, violent, or policy-violating concepts.
+    Return ONLY the suggestion text.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: modelId,
+      contents: prompt,
+      config: {
+        safetySettings: [
+          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
+          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
+          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
+          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
+        ]
+      }
     });
     return response.text?.trim() || "";
   } catch (error) {
@@ -171,45 +283,45 @@ export const generateDetailSuggestions = async (topic: string, style: string, la
 export const translateText = async (text: string, targetLanguage: Language): Promise<string> => {
   if (!text || !text.trim()) return "";
   
+  const ai = new GoogleGenAI({ apiKey });
   const modelId = "gemini-2.5-flash";
   const targetLangName = targetLanguage === 'ko' ? 'Korean' : 'English';
   
-  const prompt = `
-    Translate the following text to ${targetLangName}. 
-    Return ONLY the translation, with no additional commentary or quotes.
-    
-    Text: "${text}"
-  `;
+  const prompt = `Translate to ${targetLangName}. Return ONLY translation. Text: "${text}"`;
 
   try {
     const response = await ai.models.generateContent({
       model: modelId,
       contents: prompt,
+      config: {
+        safetySettings: [{ category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" }]
+      }
     });
     
     let cleaned = response.text?.trim() || text;
-    // Remove surrounding quotes if the model added them despite instructions
     if (cleaned.length > 1 && cleaned.startsWith('"') && cleaned.endsWith('"')) {
         cleaned = cleaned.slice(1, -1);
     }
     return cleaned;
   } catch (error) {
-    console.error("Error translating text:", error);
-    return text; // Return original text on failure
+    return text;
   }
 };
 
 export const translatePromptResult = async (result: GeneratedPrompt, targetLanguage: Language): Promise<GeneratedPrompt> => {
+  const ai = new GoogleGenAI({ apiKey });
   const modelId = "gemini-2.5-flash";
   const targetLangName = targetLanguage === 'ko' ? 'Korean' : 'English';
   
-  // Prepare data for translation, including shots and narration
+  // Only send translatable fields
   const contentToTranslate = {
     title: result.title,
     visualPrompt: result.visualPrompt,
     technicalPrompt: result.technicalPrompt,
     negativePrompt: result.negativePrompt,
     narration: result.narration,
+    characters: result.characters,
+    productionNote: result.productionNote, // Added Production Note
     shots: result.shots.map(s => ({
       index: s.index,
       visualPrompt: s.visualPrompt,
@@ -217,34 +329,24 @@ export const translatePromptResult = async (result: GeneratedPrompt, targetLangu
       bgm: s.bgm,
       sfx: s.sfx,
       characters: s.characters,
-      dialogue: s.dialogue
+      dialogue: s.dialogue,
+      lipSync: s.lipSync // Include Lip Sync in translation
     }))
   };
 
+  // STRICTER Translation Prompt for Consistency
   const prompt = `
-    You are a professional translator for Video AI prompts.
-    Translate the values of the following JSON object to ${targetLangName}.
+    You are a professional AI Localization Engine.
+    Task: Translate the JSON VALUES to ${targetLangName}.
+
+    CRITICAL RULES:
+    1. **Structure**: Keep JSON KEYS exactly as they are (English). Do NOT translate keys.
+    2. **Technical Terms**: Do NOT translate specific technical terms (e.g., "Unreal Engine 5", "8k", "Arri Alexa", "Bokeh") even if the target is Korean. Keep them in English for accuracy.
+    3. **Names**: Keep character names consistent.
+    4. **Narration Tags**: In the 'narration' field, keep emotion/tone tags (text inside square brackets like [Whisper], [Excited]) in ENGLISH. Do NOT translate the tags themselves, only translate the spoken text.
+    5. **Formatting**: The output MUST be valid JSON. Escape all newlines inside strings (use \\n). Do not create invalid control characters.
     
-    CRITICAL RULE:
-    - Keep all JSON KEYS in English (e.g., "visualPrompt", "shots", "index"). ONLY translate the VALUES.
-    
-    Rules:
-    1. 'title': Translate naturally.
-    2. 'visualPrompt': Translate naturally, preserving the vivid descriptive tone.
-    3. 'technicalPrompt': Translate descriptive adjectives, but KEEP specific technical terms (e.g., "Unreal Engine 5", "Octane Render", "Bokeh", "8k") in English if they are standard industry terms.
-    4. 'negativePrompt': Translate naturally.
-    5. 'narration': Translate the script content naturally to fit the new language flow. Translate the Emotion/Tone tags inside brackets (e.g., [Happy] -> [행복하게]) if appropriate for the target language context.
-    6. 'shots': 
-       - Translate 'visualPrompt' and 'technicalPrompt'.
-       - Translate 'bgm' and 'sfx' descriptions naturally.
-       - Translate 'characters': Translate 'name' and 'description'.
-       - Translate 'dialogue': Translate the spoken text and Emotion/Tone tags naturally.
-    
-    Input JSON:
-    ${JSON.stringify(contentToTranslate)}
-    
-    Output:
-    Return ONLY the valid JSON object. Do not wrap in markdown code blocks.
+    Input JSON: ${JSON.stringify(contentToTranslate)}
   `;
 
   try {
@@ -253,6 +355,7 @@ export const translatePromptResult = async (result: GeneratedPrompt, targetLangu
       contents: prompt,
       config: {
         responseMimeType: "application/json",
+        safetySettings: [{ category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" }]
       }
     });
 
@@ -261,22 +364,21 @@ export const translatePromptResult = async (result: GeneratedPrompt, targetLangu
 
     const translatedData = cleanAndParseJSON(text);
 
-    // Safely map translated shots back to original structure
-    // We iterate over the ORIGINAL shots to ensure we preserve IDs and counts
+    // Defensive mapping
     const translatedShots: Shot[] = result.shots.map((originalShot, i) => {
-      // Try to find corresponding shot in translated data by index, or fallback to array position
-      const translatedShot = translatedData.shots?.find((s: any) => s.index === originalShot.index) || translatedData.shots?.[i];
+      const tShot = (translatedData.shots && Array.isArray(translatedData.shots)) 
+        ? (translatedData.shots.find((s: any) => s.index === originalShot.index) || translatedData.shots[i])
+        : null;
 
       return {
-        id: originalShot.id, // Keep original ID
-        index: originalShot.index,
-        visualPrompt: translatedShot?.visualPrompt || originalShot.visualPrompt,
-        technicalPrompt: translatedShot?.technicalPrompt || originalShot.technicalPrompt,
-        duration: originalShot.duration, // Duration usually shouldn't change
-        bgm: translatedShot?.bgm || originalShot.bgm,
-        sfx: translatedShot?.sfx || originalShot.sfx,
-        characters: translatedShot?.characters || originalShot.characters,
-        dialogue: translatedShot?.dialogue || originalShot.dialogue
+        ...originalShot,
+        visualPrompt: tShot?.visualPrompt || originalShot.visualPrompt,
+        technicalPrompt: tShot?.technicalPrompt || originalShot.technicalPrompt,
+        bgm: tShot?.bgm || originalShot.bgm,
+        sfx: tShot?.sfx || originalShot.sfx,
+        characters: tShot?.characters || originalShot.characters,
+        dialogue: tShot?.dialogue || originalShot.dialogue,
+        lipSync: tShot?.lipSync || originalShot.lipSync
       };
     });
 
@@ -287,82 +389,68 @@ export const translatePromptResult = async (result: GeneratedPrompt, targetLangu
       technicalPrompt: translatedData.technicalPrompt || result.technicalPrompt,
       negativePrompt: translatedData.negativePrompt || result.negativePrompt,
       narration: translatedData.narration || result.narration,
+      characters: translatedData.characters || result.characters,
+      productionNote: translatedData.productionNote || result.productionNote, // Map Production Note
       shots: translatedShots
     };
 
   } catch (error) {
     console.error("Error translating result:", error);
-    // Return original result if translation fails to prevent data loss
-    return result;
+    return result; // Fallback to original on error
   }
 };
 
 export const generateVideoPrompt = async (request: PromptRequest, language: Language): Promise<GeneratedPrompt> => {
+  const ai = new GoogleGenAI({ apiKey });
   const modelId = "gemini-2.5-flash";
-
   const targetLanguage = language === 'ko' ? 'Korean' : 'English';
   
-  // Calculate required shot count
   const totalSec = parseDuration(request.totalDuration);
   const cutSec = parseDuration(request.cutDuration);
+  
+  // 1. Calculate Shot Count
   let targetShotCount = 0;
   if (totalSec > 0 && cutSec > 0) {
     targetShotCount = Math.floor(totalSec / cutSec);
   }
+  if (targetShotCount === 0) targetShotCount = 1;
 
+  // 2. Calculate Narration Word Count
+  const approxWordCount = totalSec > 0 ? Math.floor(totalSec * 2.5) : 30;
+
+  const motionString = Array.isArray(request.motion) ? request.motion.join(', ') : request.motion;
+
+  // Enhanced System Instruction for Guidelines & Consistency
   const systemInstruction = `
-    You are an expert AI Prompt Engineer specializing in video generation models like OpenAI Sora, Google Veo, and Runway Gen-3.
+    You are an expert AI Video Prompt Architect specialized in Sora, Veo, and Runway Gen-3.
+    Act as a "Dream Team" of world-class filmmakers (Director, DOP, Art Director, Sound Designer).
     
-    Your task is to take a user's basic idea and expand it into a highly detailed, cinematic, and technically precise prompt, PLUS a voiceover narration script and sound design.
+    OUTPUT RULES:
+    1. **Language**: Output values in ${targetLanguage}, but keep JSON Keys in English.
+    2. **Format**: Return strictly valid JSON matching the schema.
     
-    CRITICAL LANGUAGE RULE:
-    - The output fields 'title', 'visualPrompt', 'technicalPrompt', 'narration', and 'shots' content MUST be written in ${targetLanguage}.
-    - DO NOT translate JSON Keys (e.g. keep "visualPrompt", "shots", "bgm" as keys).
-    - If the target language is Korean:
-      1. Translate the 'visualPrompt' (descriptive scene) fully into natural Korean.
-      2. For 'technicalPrompt', you may keep standard technical terms in English.
-      3. 'shots' visual prompts, character descriptions, dialogue, BGM, and SFX must be in ${targetLanguage}.
-      4. 'narration' must be in ${targetLanguage}.
-
-    Rules:
-    1. Focus on visual storytelling: Describe texture, lighting, color grading, and movement dynamics.
-    2. Be specific about the camera movement defined by the user.
-    3. Adhere to the requested style.
-    4. SHOT COUNT RULE (STRICT):
-       - You MUST generate exactly the number of shots calculated from the user's input.
-       - If the user specifies a Total Duration and Cut Duration that results in X shots, you must provide X items in the 'shots' array.
-    5. For each shot:
-       - Define 'characters': Identify main characters.
-       - Define 'dialogue': If characters speak, write the line with emotion tags.
-       - Define 'bgm': Suggest specific musical mood/genre/tempo matching the visual.
-       - Define 'sfx': Suggest specific sound effects matching the action.
-    6. Generate a 'narration' script for the overall video voiceover. 
-       - Use Emotion/Tone tags in brackets.
-       - CRITICAL: The length of the narration must strictly fit the 'Total Video Duration'. (e.g., ~2.5 words per second). Ensure it is not too long or too short for the given duration.
-    7. Output must be JSON.
+    PLATFORM GUIDELINES (COMPLIANCE):
+    1. **Visual Objectivity**: Describe observable visual elements (lighting, texture, movement) rather than abstract feelings. Instead of "scary", say "dim flickering lights, long sharp shadows".
+    2. **Safety**: Do NOT generate NSFW, sexually explicit, realistic violence, or hate speech content.
+    3. **Public Figures**: Do NOT use specific real-world names (celebrities, politicians). Use generic descriptions (e.g., "a man resembling a 50s movie star").
+    
+    GENERATION CONSTRAINTS:
+    - **Duration**: Total ${request.totalDuration}, Cut ${request.cutDuration}.
+    - **Structure**: You MUST generate EXACTLY ${targetShotCount} shots. This is a strict mathematical requirement.
+    - **Narration**: Write a script fitting exactly ${request.totalDuration} (approx ${approxWordCount} words).
+    - **Tags**: Narration MUST include emotion tags (e.g. [Whisper], [Excited]) at the start of lines. IMPORTANT: These tags must ALWAYS be in ENGLISH, regardless of the output language.
+    - **Lip Sync**: For shots with dialogue, generate technical instructions optimized for **AI Lip-Sync platforms (e.g., D-ID, HeyGen, SyncLabs)**. Describe specific **Visemes (mouth shapes)**, jaw aperture, and facial muscle tension to match the phonetic sounds of the dialogue. e.g., "Wide open 'A' shape", "Compressed lips for 'M'", "Quivering chin with slight smile".
+    - **Production Note**: Fill the 'productionNote' object with high-level professional insights (Directorial Vision, Color Grading, etc.).
+    
+    Ensure all strings are properly escaped (no raw newlines in strings).
   `;
 
   const userContent = `
-    Create a video generation prompt for the following concept:
-    
-    Topic/Subject: ${request.topic}
+    Topic: ${request.topic}
     Style: ${request.style}
-    Camera Motion: ${request.motion}
-    Aspect Ratio: ${request.aspectRatio}
-    Total Video Duration: ${request.totalDuration}
-    Average Cut Duration: ${request.cutDuration}
-    Calculated Target Shot Count: ${targetShotCount > 0 ? targetShotCount : "Auto-calculate based on total/cut duration"} (STRICTLY FOLLOW THIS COUNT if provided)
-    Additional Details: ${request.details || "None"}
-    
-    Requirements:
-    1. Create a main 'visualPrompt' summarizing the whole video.
-    2. Create a list of 'shots'. 
-       - STRICTLY generate EXACTLY ${targetShotCount > 0 ? targetShotCount : "appropriate number of"} shots.
-       - Ensure the sum of shot durations equals the Total Duration.
-       - For each shot, strictly define 'characters', 'dialogue', 'bgm', and 'sfx'.
-    3. Create a 'narration' script that fits within the ${request.totalDuration}.
-    
-    Language of output: ${targetLanguage}.
+    Motion: ${motionString}
+    Ratio: ${request.aspectRatio}
+    Details: ${request.details || "None"}
   `;
 
   try {
@@ -373,35 +461,48 @@ export const generateVideoPrompt = async (request: PromptRequest, language: Lang
         systemInstruction: systemInstruction,
         responseMimeType: "application/json",
         responseSchema: promptSchema,
-        temperature: 0.7, 
+        temperature: 0.7,
+        safetySettings: [
+          // Allow artistic content (e.g. "War movie", "Thriller") but block actual harm
+          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
+          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
+          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
+          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
+        ]
       },
     });
 
     const text = response.text;
-    if (!text) throw new Error("No response from Gemini");
+    if (!text) throw new Error("No response text from Gemini");
 
     const data = cleanAndParseJSON(text);
 
-    // Post-process shots to ensure they have IDs and correct structure
-    const shots: Shot[] = (data.shots || []).map((s: any) => ({
-      id: generateId(), // Use safe ID generator
-      index: s.index,
-      visualPrompt: s.visualPrompt,
-      technicalPrompt: s.technicalPrompt,
-      duration: s.duration,
-      characters: s.characters || [],
+    // Post-processing validation
+    const shots: Shot[] = (Array.isArray(data.shots) ? data.shots : []).map((s: any, idx: number) => ({
+      id: generateId(),
+      index: s.index || idx + 1,
+      visualPrompt: s.visualPrompt || "",
+      technicalPrompt: s.technicalPrompt || "",
+      // STRICTLY ENFORCE USER INPUT DURATION
+      duration: request.cutDuration || s.duration || "3s", 
+      characters: Array.isArray(s.characters) ? s.characters : [],
       dialogue: s.dialogue || "",
+      lipSync: s.lipSync || "", // Default to empty if missing
       bgm: s.bgm || "",
       sfx: s.sfx || ""
     }));
 
     return {
-      id: generateId(), // Use safe ID generator
-      title: data.title,
-      visualPrompt: data.visualPrompt,
-      technicalPrompt: data.technicalPrompt,
+      id: generateId(),
+      title: data.title || request.topic.substring(0, 20),
+      visualPrompt: data.visualPrompt || "",
+      technicalPrompt: data.technicalPrompt || "",
       negativePrompt: data.negativePrompt,
-      narration: data.narration,
+      narration: data.narration || "",
+      characters: Array.isArray(data.characters) ? data.characters : [],
+      productionNote: data.productionNote || { 
+        directorVision: "N/A", cinematography: "N/A", artDirection: "N/A", soundDesign: "N/A", editingStyle: "N/A" 
+      },
       shots: shots,
       timestamp: Date.now(),
       originalRequest: request
